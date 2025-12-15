@@ -1,5 +1,5 @@
 /**
- * LLM Chat App Frontend (最终修正版本：解决流式和历史记录显示问题)
+ * LLM Chat App Frontend (最终修正 V3：强制启动和流式兼容)
  */
 
 // --- DOM elements ---
@@ -15,7 +15,6 @@ const stopButton = document.getElementById('stop-button');
 let chatHistory = []; 
 let isProcessing = false;
 let currentConversationId = null; 
-let initialMessageDisplayed = false; 
 
 const STARTUP_MESSAGE = "Hello! I'm an LLM chat app powered by Cloudflare Workers AI. How can I help you today?";
 
@@ -43,9 +42,7 @@ async function stopGenerating() {
     if (!isProcessing || !currentConversationId) return;
 
     try {
-        await fetch(`/api/chat/${currentConversationId}/cancel`, {
-            method: "POST",
-        });
+        await fetch(`/api/chat/${currentConversationId}/cancel`, { method: "POST" });
     } catch (error) {
         console.error("Error sending cancel signal:", error);
     } finally {
@@ -63,9 +60,7 @@ function cleanUpAfterProcessing(isCancelled = false) {
     stopButton.classList.remove('visible');
     userInput.focus();
     
-    // 成功后渲染历史记录，显示新的会话项 (针对问题三)
     if (!isCancelled) {
-        // 🚨 修正：确保在保存完成后，侧边栏被刷新和高亮
         renderHistorySidebar(true); 
     }
 }
@@ -96,12 +91,10 @@ async function sendMessage() {
 
         const response = await fetch("/api/chat", {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 messages: [{ role: "user", content: message }], 
-                // 🚨 修正：如果 ID 为 null，发送 null
+                // 确保发送 null 或 UUID 字符串
                 conversationId: currentConversationId, 
             }),
         });
@@ -116,7 +109,7 @@ async function sendMessage() {
             console.log("Set/Updated Conversation ID:", currentConversationId);
         }
 
-        // 🚨 修正：简化流处理，直接拼接文本块 (解决流式问题)
+        // 最终流处理逻辑：直接拼接文本块
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let responseText = "";
@@ -132,15 +125,12 @@ async function sendMessage() {
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
-        // 流结束后，清理状态并渲染历史侧边栏
+        // 成功后，更新侧边栏
         cleanUpAfterProcessing();
         
     } catch (error) {
         console.error("Error:", error);
-        addMessageToChat(
-            "assistant",
-            "Sorry, there was an error processing your request.",
-        );
+        addMessageToChat("assistant", "Sorry, there was an error processing your request.",);
         cleanUpAfterProcessing(true);
     }
 }
@@ -160,20 +150,19 @@ function addMessageToChat(role, content, isSystem = false) {
 // ----------------------------------------------------
 
 async function renderHistorySidebar(highlightOnly = false) {
-    // 仅更新高亮状态的逻辑
     if (highlightOnly) {
          document.querySelectorAll('.history-item').forEach(el => el.classList.remove('selected'));
-         // 如果当前有 ID，选中它
          if (currentConversationId) {
             document.getElementById(`item-${currentConversationId}`)?.classList.add('selected');
+         } else {
+             document.getElementById('new-chat-placeholder')?.classList.add('selected');
          }
          return;
     }
     
     conversationList.innerHTML = ''; 
 
-    // 🚨 修正：从 KV 加载所有历史记录列表 (如果 backend 支持)
-    // ⚠️ 假设我们现在只有一个列表项：当前会话
+    // 假设当前对话是唯一的列表项
     if (currentConversationId) {
         // 使用内存中的 chatHistory 来生成标题
         const userMessage = chatHistory.find(msg => msg.role === 'user');
@@ -181,7 +170,8 @@ async function renderHistorySidebar(highlightOnly = false) {
         
         const itemEl = document.createElement('div');
         itemEl.id = `item-${currentConversationId}`;
-        itemEl.className = 'history-item selected'; // 默认选中当前对话
+        // 🚨 修正：始终选中当前对话
+        itemEl.className = 'history-item selected'; 
         itemEl.innerHTML = `<div>${title}</div>`;
         
         itemEl.addEventListener('click', () => {
@@ -190,10 +180,11 @@ async function renderHistorySidebar(highlightOnly = false) {
         conversationList.appendChild(itemEl);
     }
     
-    // 渲染“新建对话”提示 (始终在列表底部)
+    // 渲染“新建对话”提示
     const newItemEl = document.createElement('div');
     newItemEl.id = 'new-chat-placeholder';
-    newItemEl.className = `history-item ${!currentConversationId ? 'selected' : ''}`; // 如果是新对话，选中它
+    // 🚨 修正：如果 currentConversationId 是 null，选中“新建聊天”
+    newItemEl.className = `history-item ${!currentConversationId ? 'selected' : ''}`; 
     newItemEl.innerHTML = `<div>+ 新建聊天</div>`;
     newItemEl.addEventListener('click', addNewConversation);
     conversationList.appendChild(newItemEl);
@@ -201,15 +192,10 @@ async function renderHistorySidebar(highlightOnly = false) {
 
 
 async function loadConversation(conversationId) {
-    if (isProcessing || conversationId === currentConversationId) return; // 避免重复加载
+    if (isProcessing || conversationId === currentConversationId) return;
     
     try {
         const response = await fetch(`/api/history?id=${conversationId}`);
-        
-        if (!response.ok) {
-            throw new Error('Failed to fetch conversation history');
-        }
-
         const data = await response.json();
         
         currentConversationId = conversationId;
@@ -226,18 +212,16 @@ async function loadConversation(conversationId) {
 
     } catch (error) {
         console.error("Error loading conversation:", error);
-        alert('无法加载历史记录。');
     }
 }
 
 function addNewConversation() {
-    currentConversationId = null; // 🚨 修正：设为 null
+    currentConversationId = null; // 🚨 核心：重置 ID 为 null
     chatHistory = []; 
     chatMessages.innerHTML = ''; 
     addMessageToChat("assistant", STARTUP_MESSAGE);
-    initialMessageDisplayed = true;
     userInput.focus();
-    renderHistorySidebar(true); // 清除高亮，选中“新建聊天”
+    renderHistorySidebar(); // 重新渲染，将“新建聊天”设为选中
 }
 
 
@@ -246,11 +230,6 @@ function addNewConversation() {
 document.addEventListener('DOMContentLoaded', () => {
     newChatButton.addEventListener('click', addNewConversation);
 
-    if (!initialMessageDisplayed) {
-        addMessageToChat("assistant", STARTUP_MESSAGE);
-        initialMessageDisplayed = true;
-    }
-    
-    // 确保页面加载时尝试渲染侧边栏
-    renderHistorySidebar(); 
+    // 🚨 修正：使用 addNewConversation 作为唯一的启动入口
+    addNewConversation(); 
 });
