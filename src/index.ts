@@ -96,28 +96,22 @@ async function handleChatRequest(
     // --- 3.2 自定义流式处理 (P0) ---
 
     // 1. 设置 Workers AI 的 fetch 参数
-    const aiApiUrl = `https://api.cloudflare.com/client/v4/accounts/${env.ACCOUNT_ID}/ai/run/${MODEL_ID}`; 
+    // const aiApiUrl = `https://api.cloudflare.com/client/v4/accounts/${env.ACCOUNT_ID}/ai/run/${MODEL_ID}`; 
     // 注意：您需要在 wrangler.json 的 vars 中或作为 Secret 添加 ACCOUNT_ID
     
     // 2. 向 Workers AI 发起请求 (使用标准 fetch)
-    const aiResponse = await fetch(aiApiUrl, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${env.AI_API_KEY}`, // 假设您使用 AI API Key
-            // 或者使用内置的 Workers AI 绑定 (更推荐)：
-            // Workers AI SDK (env.AI.run) 内部处理了认证，但如果使用 fetch 需要手动认证。
-        },
-        body: JSON.stringify({
-            messages: history,
-            stream: true, // 启用流式传输
-        }),
-        signal: controller.signal, // 绑定 AbortController (P0)
-    });
+	const aiResponse = await env.AI.run(
+		MODEL_ID,
+		{
+			messages: history,
+			stream: true, // 启用流式传输
+		},
+		{ signal: controller.signal } // 绑定 AbortController
+	);
 
-    if (!aiResponse.body) {
-        return new Response("No response body from AI", { status: 500 });
-    }
+	if (!aiResponse.body) {
+		return new Response("No response body from AI", { status: 500 });
+	}
     
     // 3. 创建自定义 ReadableStream 来代理、捕获和格式化数据 (P0)
     let assistantResponseText = "";
