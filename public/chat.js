@@ -164,4 +164,70 @@ async function sendMessage() {
         // 🚨 异常处理：区分用户取消和实际错误
         if (error.name === 'AbortError') {
              assistantMessageEl.querySelector("p").textContent += "\n\n(Generation cancelled by user.)";
-             console
+             console.log("Request successfully aborted.");
+        } else {
+             console.error("Error:", error);
+             addMessageToChat(
+                 "assistant",
+                 "Sorry, there was an error processing your request. Please check the console for details.",
+             );
+        }
+    } finally {
+        // --- 10. 状态重置 (无论成功、失败或取消都会执行) ---
+        typingIndicator.classList.remove("visible");
+        // 🚨 新增：隐藏取消按钮
+        cancelButton.classList.remove("visible"); 
+
+        isProcessing = false;
+        userInput.disabled = false;
+        sendButton.disabled = false;
+        // 🚨 新增：清除 AbortController 引用
+        currentAbortController = null; 
+        userInput.focus();
+    }
+}
+
+/**
+ * 🚨 新增功能：向后端发送请求以取消当前的 LLM 生成 (P0)。
+ */
+async function cancelGeneration() {
+    if (!currentConversationId || !isProcessing) {
+        console.warn("No active request to cancel or missing conversation ID.");
+        return;
+    }
+    
+    // 1. 立即触发本地 AbortController，停止前端的流式处理循环
+    if (currentAbortController) {
+        currentAbortController.abort();
+    }
+
+    // 2. 向后端发送取消信号 (Worker 会中止其内部的 fetch 请求)
+    try {
+        // 🚨 调用后端新增的取消路由
+        const cancelUrl = `/api/chat/${currentConversationId}/cancel`;
+        const response = await fetch(cancelUrl, { method: "POST" });
+        
+        if (response.ok) {
+            console.log("Successfully sent cancel signal to backend.");
+        } else {
+            console.error("Backend cancel failed:", await response.text());
+        }
+    } catch (error) {
+        console.error("Error sending cancel request:", error);
+    }
+}
+
+/**
+ * 辅助函数：将消息添加到聊天 UI 容器中
+ * @param {string} role - 消息发送者角色 ('user' 或 'assistant')
+ * @param {string} content - 消息内容 (纯文本)
+ */
+function addMessageToChat(role, content) {
+    const messageEl = document.createElement("div");
+    messageEl.className = `message ${role}-message`; // 应用 CSS 样式
+    messageEl.innerHTML = `<p>${content}</p>`;
+    chatMessages.appendChild(messageEl);
+
+    // 确保滚动到最底部
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
