@@ -41,7 +41,13 @@
         // 在 Worker 脚本中访问 Workers AI 服务的绑定名称 (对应于 types.ts 中的 AI)
         "binding": "AI" 
     },
-    
+    "kv_namespaces": [
+		{
+			"binding": "CHAT_CONTEXT_KV",
+			"id": "1dcd2dc3c6804a03bf008b5fdb8cc4be", // ⚠️ 您需要手动在 Cloudflare Dashboard 创建 KV 命名空间并替换此 ID
+			"preview_id": "YOUR_PREVIEW_KV_ID" // 预览环境 ID
+		}
+	],
     // 启用上传 Source Map，以便于在 Cloudflare 仪表板中调试 Worker 错误。
     "upload_source_maps": true,
     

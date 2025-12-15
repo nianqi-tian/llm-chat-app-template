@@ -25,6 +25,11 @@ export interface Env {
     
     // 注意：如果需要实现 P0 清单中的“对话上下文管理”，您还需要在此处添加 KV 存储绑定：
     // CHAT_CONTEXT_KV: KVNamespace; 
+	// 新增：KV 存储绑定
+    CHAT_CONTEXT_KV: KVNamespace; 
+    
+    // 示例：可以添加配置变量
+    SYSTEM_PROMPT: string;
 }
 
 /**
