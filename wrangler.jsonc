@@ -1,22 +1,71 @@
 /**
  * For more details on how to configure Wrangler, refer to:
  * https://developers.cloudflare.com/workers/wrangler/configuration/
+ *
+ * Wrangler 是 Cloudflare Workers 的命令行工具和配置文件格式。
+ * 此文件定义了 Worker 的部署、构建和资源绑定。
  */
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "llm-chat-app-template",
-	"main": "src/index.ts",
-	"compatibility_date": "2025-10-08",
-	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
-	"assets": {
-		"binding": "ASSETS",
-		"directory": "./public"
-	},
-	"observability": {
-		"enabled": true
-	},
-	"ai": {
-		"binding": "AI"
-	},
-	"upload_source_maps": true
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // Worker 的项目名称。用于 Cloudflare Dashboard 和 CLI 部署。
+    "name": "llm-chat-app-template",
+    // Worker 脚本的入口文件路径。
+    "main": "src/index.ts",
+    
+    // Cloudflare Workers 的兼容性日期。
+    // 使用较新的日期可以启用最新的运行时行为和功能。
+    "compatibility_date": "2025-10-08",
+    
+    // 兼容性标志，用于启用特定的运行时特性或 polyfill。
+    "compatibility_flags": [
+        "nodejs_compat", // 启用 Node.js 兼容性 API (例如 `process` 或 `Buffer`)
+        "global_fetch_strictly_public" // 确保全局 `fetch` 行为符合 Web 标准
+    ],
+    
+    // 静态资产配置 (用于服务前端 UI)
+    "assets": {
+        // 在 Worker 脚本中访问静态资产的绑定名称 (对应于 types.ts 中的 ASSETS)
+        "binding": "ASSETS", 
+        // 包含前端文件的本地目录
+        "directory": "./public"
+    },
+    
+    // 可观测性配置
+    "observability": {
+        // 启用日志记录和指标收集，有助于调试和监控 (对应于 P2 可观测性)
+        "enabled": true
+    },
+    
+    // Workers AI 绑定配置
+    "ai": {
+        // 在 Worker 脚本中访问 Workers AI 服务的绑定名称 (对应于 types.ts 中的 AI)
+        "binding": "AI" 
+    },
+    
+    // 启用上传 Source Map，以便于在 Cloudflare 仪表板中调试 Worker 错误。
+    "upload_source_maps": true,
+    
+    // ----------------------------------------------------------------------
+    // 🚨 缺失的关键配置 (为实现 P0/P1 清单功能，需要添加以下配置)：
+    // ----------------------------------------------------------------------
+    
+    /*
+    // 1. KV 存储绑定 (用于实现 P0 对话上下文管理和异步数据持久化)
+    "kv_namespaces": [
+        {
+            "binding": "CHAT_CONTEXT_KV", 
+            "id": "YOUR_KV_NAMESPACE_ID", // 替换为你创建的 KV Namespace ID
+            "preview_id": "YOUR_PREVIEW_KV_NAMESPACE_ID" // 开发环境的 ID
+        }
+    ],
+    
+    // 2. 环境变量 (Secrets) 配置 (用于存储敏感配置，如 LLM API Key，如果未使用 Workers AI)
+    // 注意：Workers AI 使用 AI 绑定，不需要单独的 API Key。但如果切换到 OpenAI 或其他服务，则需要：
+    "vars": {
+        "OPENAI_MODEL_NAME": "gpt-4o-mini",
+        "DEFAULT_TEMPERATURE": "0.7"
+    },
+    // API 密钥应作为 Secret 存储：
+    // $ npx wrangler secret put OPENAI_API_KEY
+    */
 }
