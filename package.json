@@ -21,9 +21,9 @@
 		"@cloudflare/workers-types": "^4.20250425.0",
 		"@types/node": "24.10.1",
 		"typescript": "5.9.3",
+		"uuid": "^9.0.1",
 		"vitest": "3.2.4",
-		"wrangler": "4.51.0",
-		"uuid": "^9.0.1"
+		"wrangler": "4.51.0"
 	},
 	"private": true,
 	"scripts": {
