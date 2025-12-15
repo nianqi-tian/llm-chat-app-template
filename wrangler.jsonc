@@ -26,9 +26,5 @@
         }
     ],
 
-    "site": {
-        "bucket": "./public" // 假设前端文件在 public 文件夹下
-
-    },
 	"upload_source_maps": true
 }
