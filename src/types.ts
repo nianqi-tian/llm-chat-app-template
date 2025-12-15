@@ -1,23 +1,29 @@
-/**
- * Type definitions for the LLM chat application.
- */
+// src/types.ts
 
+// Worker 环境变量接口，用于类型安全地访问绑定
 export interface Env {
-	/**
-	 * Binding for the Workers AI API.
-	 */
-	AI: Ai;
-
-	/**
-	 * Binding for static assets.
-	 */
-	ASSETS: { fetch: (request: Request) => Promise<Response> };
+    ASSETS: { fetch: typeof fetch }; // Workers AI 模板通常包含这个用于服务前端静态文件
+    AI: { run: (model: string, inputs: any, options?: any) => Promise<any> }; // Workers AI 绑定
+    CHAT_HISTORY: KVNamespace;       // 我们为 KV 历史记录添加的绑定
+    // ⚠️ 如果您使用 OpenAI 兼容 API 而不是 Workers AI，请添加以下内容
+    // OPENAI_API_KEY: string;
+    // LLM_ENDPOINT: string; 
 }
 
-/**
- * Represents a chat message.
- */
+
+// 核心消息结构 (我们用于 KV 存储和内部上下文管理)
+export interface Message {
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    timestamp: number;
+    interrupted?: boolean; // 标记是否被取消
+}
+
+// Workers AI SDK 定义的消息结构
 export interface ChatMessage {
-	role: "system" | "user" | "assistant";
-	content: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
 }
+
+// 对话历史记录是 Message 数组
+export type ConversationHistory = Message[];

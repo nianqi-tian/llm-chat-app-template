@@ -18,5 +18,17 @@
 	"ai": {
 		"binding": "AI"
 	},
+    "kv_namespaces": [
+        {
+            "binding": "CHAT_HISTORY", 
+            "id": "1dcd2dc3c6804a03bf008b5fdb8cc4be", // ⚠️ 请替换为您创建的 KV ID
+            "preview_id": "1dcd2dc3c6804a03bf008b5fdb8cc4be" // ⚠️ 可选：预览环境的 KV ID
+        }
+    ],
+
+    "site": {
+        "bucket": "./public", // 假设前端文件在 public 文件夹下
+        "entry-point": "workers-site"
+    },
 	"upload_source_maps": true
 }
