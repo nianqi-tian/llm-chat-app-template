@@ -1,5 +1,6 @@
 /**
  * Type definitions for the LLM chat application.
+<<<<<<< HEAD
  *
  * 此文件定义了 Worker 脚本中使用的主要类型和接口，包括环境变量 (Env) 和对话消息结构 (ChatMessage)。
  */
@@ -30,10 +31,25 @@ export interface Env {
     
     // 示例：可以添加配置变量
     SYSTEM_PROMPT: string;
+=======
+ */
+
+export interface Env {
+	/**
+	 * Binding for the Workers AI API.
+	 */
+	AI: Ai;
+
+	/**
+	 * Binding for static assets.
+	 */
+	ASSETS: { fetch: (request: Request) => Promise<Response> };
+>>>>>>> 16af6b9 (source repo import)
 }
 
 /**
  * Represents a chat message.
+<<<<<<< HEAD
  *
  * 定义了对话中单个消息的标准结构，符合大多数主流 LLM API (如 OpenAI/Workers AI) 的消息格式。
  */
@@ -55,3 +71,10 @@ export interface ChatMessage {
      */
     content: string;
 }
+=======
+ */
+export interface ChatMessage {
+	role: "system" | "user" | "assistant";
+	content: string;
+}
+>>>>>>> 16af6b9 (source repo import)
