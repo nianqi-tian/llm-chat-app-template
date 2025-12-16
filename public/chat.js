@@ -16,6 +16,8 @@ const webSearchToggle = document.getElementById('web-search-toggle');
 let chatHistory = []; 
 let isProcessing = false;
 let currentConversationId = null; 
+let conversationIndex = []; // 多会话索引：[{ id, title, updatedAt }]
+const CONVERSATION_STORAGE_KEY = 'chat_conversations_v1';
 
 const STARTUP_MESSAGE = "Hello! I'm an LLM chat app powered by Cloudflare Workers AI. How can I help you today?";
 
@@ -61,8 +63,9 @@ function cleanUpAfterProcessing(isCancelled = false) {
     stopButton.classList.remove('visible');
     userInput.focus();
     
+    // 成功完成一次对话轮次后，重新渲染侧边栏，让当前会话出现在历史列表中
     if (!isCancelled) {
-        renderHistorySidebar(true); 
+        renderHistorySidebar(false); 
     }
 }
 
@@ -71,11 +74,16 @@ async function sendMessage() {
     const message = userInput.value.trim();
     if (message === "" || isProcessing) return;
 
+    const prevConversationId = currentConversationId;
+    const isNewConversation = !prevConversationId;
+
     isProcessing = true;
     userInput.disabled = true;
     sendButton.disabled = true;
     stopButton.classList.add('visible');
 
+    // 将本轮用户消息加入内存中的 chatHistory，便于生成侧边栏标题
+    chatHistory.push({ role: 'user', content: message });
     addMessageToChat("user", message);
 
     userInput.value = "";
@@ -129,7 +137,8 @@ async function sendMessage() {
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
-        // 成功后，更新侧边栏
+        // 成功后，更新会话索引 + 侧边栏
+        upsertConversationIndex(currentConversationId, message, isNewConversation);
         cleanUpAfterProcessing();
         
     } catch (error) {
@@ -154,44 +163,88 @@ function addMessageToChat(role, content, isSystem = false, isInterrupted = false
 
 
 // ----------------------------------------------------
-// --- 历史记录管理函数 ---
+// --- 多会话历史管理（本地持久化） ---
 // ----------------------------------------------------
+
+function loadConversationIndexFromStorage() {
+    try {
+        const raw = localStorage.getItem(CONVERSATION_STORAGE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed;
+    } catch (e) {
+        console.error('Failed to load conversation index from storage:', e);
+        return [];
+    }
+}
+
+function saveConversationIndexToStorage() {
+    try {
+        localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(conversationIndex));
+    } catch (e) {
+        console.error('Failed to save conversation index to storage:', e);
+    }
+}
+
+function upsertConversationIndex(conversationId, firstUserMessageText, isNewConversation) {
+    if (!conversationId) return;
+
+    const existingIndex = conversationIndex.findIndex(c => c.id === conversationId);
+    const now = Date.now();
+
+    if (existingIndex === -1) {
+        const titleBase = firstUserMessageText || '新对话';
+        const title = titleBase.length > 30 ? (titleBase.substring(0, 30) + '...') : titleBase;
+        conversationIndex.push({
+            id: conversationId,
+            title,
+            updatedAt: now,
+        });
+    } else {
+        conversationIndex[existingIndex].updatedAt = now;
+        if (isNewConversation && firstUserMessageText) {
+            // 如果是新对话首次出现，也可以根据第一条消息更新标题
+            const titleBase = firstUserMessageText;
+            const title = titleBase.length > 30 ? (titleBase.substring(0, 30) + '...') : titleBase;
+            conversationIndex[existingIndex].title = title;
+        }
+    }
+
+    // 将最近的会话排在最上面
+    conversationIndex.sort((a, b) => b.updatedAt - a.updatedAt);
+    saveConversationIndexToStorage();
+    renderHistorySidebar(false);
+}
 
 async function renderHistorySidebar(highlightOnly = false) {
     if (highlightOnly) {
-         document.querySelectorAll('.history-item').forEach(el => el.classList.remove('selected'));
-         if (currentConversationId) {
+        document.querySelectorAll('.history-item').forEach(el => el.classList.remove('selected'));
+        if (currentConversationId) {
             document.getElementById(`item-${currentConversationId}`)?.classList.add('selected');
-         } else {
-             document.getElementById('new-chat-placeholder')?.classList.add('selected');
-         }
-         return;
+        } else {
+            document.getElementById('new-chat-placeholder')?.classList.add('selected');
+        }
+        return;
     }
     
     conversationList.innerHTML = ''; 
 
-    // 假设当前对话是唯一的列表项
-    if (currentConversationId) {
-        // 使用内存中的 chatHistory 来生成标题
-        const userMessage = chatHistory.find(msg => msg.role === 'user');
-        const title = userMessage ? (userMessage.content.substring(0, 30) + '...') : '新对话 (点击继续)';
-        
+    // 渲染会话列表
+    conversationIndex.forEach(conv => {
         const itemEl = document.createElement('div');
-        itemEl.id = `item-${currentConversationId}`;
-        // 🚨 修正：始终选中当前对话
-        itemEl.className = 'history-item selected'; 
-        itemEl.innerHTML = `<div>${title}</div>`;
-        
+        itemEl.id = `item-${conv.id}`;
+        itemEl.className = `history-item ${conv.id === currentConversationId ? 'selected' : ''}`;
+        itemEl.innerHTML = `<div>${conv.title}</div>`;
         itemEl.addEventListener('click', () => {
-            loadConversation(currentConversationId);
+            loadConversation(conv.id);
         });
         conversationList.appendChild(itemEl);
-    }
+    });
     
     // 渲染“新建对话”提示
     const newItemEl = document.createElement('div');
     newItemEl.id = 'new-chat-placeholder';
-    // 🚨 修正：如果 currentConversationId 是 null，选中“新建聊天”
     newItemEl.className = `history-item ${!currentConversationId ? 'selected' : ''}`; 
     newItemEl.innerHTML = `<div>+ 新建聊天</div>`;
     newItemEl.addEventListener('click', addNewConversation);
@@ -200,7 +253,7 @@ async function renderHistorySidebar(highlightOnly = false) {
 
 
 async function loadConversation(conversationId) {
-    if (isProcessing || conversationId === currentConversationId) return;
+    if (isProcessing) return;
     
     try {
         const response = await fetch(`/api/history?id=${conversationId}`);
@@ -224,12 +277,13 @@ async function loadConversation(conversationId) {
 }
 
 function addNewConversation() {
+    // 仅重置当前输入区和聊天窗口，不清空历史索引
     currentConversationId = null; // 🚨 核心：重置 ID 为 null
     chatHistory = []; 
     chatMessages.innerHTML = ''; 
     addMessageToChat("assistant", STARTUP_MESSAGE);
     userInput.focus();
-    renderHistorySidebar(); // 重新渲染，将“新建聊天”设为选中
+    renderHistorySidebar(false); // 重新渲染，将“新建聊天”设为选中
 }
 
 
@@ -238,6 +292,15 @@ function addNewConversation() {
 document.addEventListener('DOMContentLoaded', () => {
     newChatButton.addEventListener('click', addNewConversation);
 
-    // 🚨 修正：使用 addNewConversation 作为唯一的启动入口
-    addNewConversation(); 
+    // 初始化会话索引（从 localStorage 恢复）
+    conversationIndex = loadConversationIndexFromStorage();
+
+    if (conversationIndex.length > 0) {
+        // 如果有历史会话，加载最近一条
+        renderHistorySidebar(false);
+        loadConversation(conversationIndex[0].id);
+    } else {
+        // 否则开启一个新的空对话
+        addNewConversation(); 
+    }
 });
