@@ -5,9 +5,16 @@ import { v4 as uuidv4 } from 'uuid';
 import { Env, ChatMessage, ConversationHistory, Message } from "./types";
 
 // ... (全局状态、常量、readHistory, saveConversation, handleGetHistory, handlePostCancel 保持不变) ...
+// --- 运行时可变配置 & 全局状态 ---
 const activeControllers = new Map<string, AbortController>(); 
-const MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"; 
-const SYSTEM_PROMPT = "You are a helpful, friendly assistant. Provide concise and accurate responses.";
+
+// 默认模型与参数，可通过环境变量覆盖（参见 wrangler.jsonc vars）
+const DEFAULT_MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_TEMPERATURE = 0.3;
+const DEFAULT_MAX_OUTPUT_TOKENS = 1024;
+const DEFAULT_MAX_CONTEXT_TOKENS = 4000;
+
+const BASE_SYSTEM_PROMPT = "You are a helpful, friendly assistant. Provide concise and accurate responses.";
 
 async function readHistory(env: Env, conversationId: string): Promise<ConversationHistory> {
     if (!conversationId) return [];
@@ -58,13 +65,58 @@ async function handlePostCancel(request: Request): Promise<Response> {
 }
 
 
+// --- 简单 Token 估算与裁剪 ---
+function estimateTokensFromMessages(messages: ChatMessage[]): number {
+    // 非精确估算：假设 4 字符 ≈ 1 token
+    const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+    return Math.ceil(totalChars / 4);
+}
+
+function trimMessagesToTokenLimit(messages: ChatMessage[], maxTokens: number): ChatMessage[] {
+    // 保留最后的对话轮次与 system 提示，丢弃最早的 user/assistant 内容
+    if (estimateTokensFromMessages(messages) <= maxTokens) return messages;
+
+    const systemMessages = messages.filter(m => m.role === 'system');
+    const nonSystem = messages.filter(m => m.role !== 'system');
+
+    while (nonSystem.length > 0 && estimateTokensFromMessages([...systemMessages, ...nonSystem]) > maxTokens) {
+        nonSystem.shift(); // 丢弃最早的一条
+    }
+    return [...systemMessages, ...nonSystem];
+}
+
+
 // --- 核心聊天逻辑：最终修正 ---
 async function handlePostChat(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     try {
-        const { messages: frontendMessages = [], conversationId: oldConversationId } = (await request.json()) as {
-            messages: ChatMessage[]; 
-            conversationId?: string; 
+        const body = (await request.json()) as {
+            messages?: ChatMessage[];
+            conversationId?: string | null;
+            options?: {
+                model?: string;
+                temperature?: number;
+                max_tokens?: number;
+                webSearchEnabled?: boolean;
+            };
         };
+
+        const frontendMessages = body.messages ?? [];
+        const oldConversationId = body.conversationId;
+
+        if (!Array.isArray(frontendMessages) || frontendMessages.length === 0) {
+            return new Response(JSON.stringify({ error: "请求体中缺少有效的 messages 数组" }), {
+                status: 400,
+                headers: { "content-type": "application/json" },
+            });
+        }
+
+        const lastMsg = frontendMessages[frontendMessages.length - 1];
+        if (!lastMsg || lastMsg.role !== "user" || typeof lastMsg.content !== "string" || !lastMsg.content.trim()) {
+            return new Response(JSON.stringify({ error: "最后一条消息必须是非空的用户消息" }), {
+                status: 400,
+                headers: { "content-type": "application/json" },
+            });
+        }
 
         // 🚨 修正 ID 逻辑：确保旧 ID 为 'null' 或 undefined/null 时生成新 ID
         const conversationId = oldConversationId && oldConversationId !== 'null' ? oldConversationId : uuidv4(); 
@@ -73,27 +125,70 @@ async function handlePostChat(request: Request, env: Env, ctx: ExecutionContext)
         activeControllers.set(conversationId, controller);
         
         const history = await readHistory(env, conversationId);
-        const userMessageContent = frontendMessages[frontendMessages.length - 1].content;
+        const userMessageContent = lastMsg.content.trim();
         
         const userMessage: Message = { role: 'user', content: userMessageContent, timestamp: Date.now() };
 
         let messagesForAI: ChatMessage[] = history.map(m => ({ role: m.role, content: m.content } as ChatMessage));
         
+        const webSearchEnabled = body.options?.webSearchEnabled === true;
+        let systemPrompt = BASE_SYSTEM_PROMPT;
+        if (webSearchEnabled) {
+            systemPrompt += " You may use web search or external knowledge if available to provide up-to-date information.";
+        }
+
         if (!messagesForAI.some((msg) => msg.role === "system")) {
-            messagesForAI.unshift({ role: "system", content: SYSTEM_PROMPT });
+            messagesForAI.unshift({ role: "system", content: systemPrompt });
+        } else {
+            // 如果已经有 system 消息，保留最后一条，但追加 webSearch 说明
+            messagesForAI = messagesForAI.map((m, idx) =>
+                m.role === "system" && idx === messagesForAI.findLastIndex(mm => mm.role === "system")
+                    ? { ...m, content: m.content + (webSearchEnabled ? "\n\n(当前会话允许使用 Web 搜索以提供尽量新的信息。)" : "") }
+                    : m
+            );
         }
         messagesForAI.push(userMessage as ChatMessage);
 
-        // 4. 调用 Workers AI
-        const llmResponse = (await env.AI.run(
-            MODEL_ID,
-            { messages: messagesForAI, max_tokens: 1024 },
-            { signal: controller.signal, returnRawResponse: true },
-        )) as unknown as Response;
+        // Token 估算与裁剪（包含用户新消息）
+        const configuredMaxContextTokens = Number(env.MAX_CONTEXT_TOKENS ?? DEFAULT_MAX_CONTEXT_TOKENS);
+        messagesForAI = trimMessagesToTokenLimit(messagesForAI, configuredMaxContextTokens);
+
+        // 4. 调用 Workers AI（可配置的模型与参数）
+        const modelId = body.options?.model || env.MODEL_ID || DEFAULT_MODEL_ID;
+        const temperature =
+            typeof body.options?.temperature === "number"
+                ? body.options.temperature
+                : Number(env.TEMPERATURE ?? DEFAULT_TEMPERATURE);
+        const maxOutputTokens =
+            typeof body.options?.max_tokens === "number"
+                ? body.options.max_tokens
+                : Number(env.MAX_OUTPUT_TOKENS ?? DEFAULT_MAX_OUTPUT_TOKENS);
+
+        const requestStart = Date.now();
+
+        // 简单的一次重试机制：如果第一次调用出现网络类错误，再尝试一次
+        async function callModelOnce(): Promise<Response> {
+            return (await env.AI.run(
+                modelId,
+                { messages: messagesForAI, max_tokens: maxOutputTokens, temperature },
+                { signal: controller.signal, returnRawResponse: true },
+            )) as unknown as Response;
+        }
+
+        let llmResponse: Response;
+        try {
+            llmResponse = await callModelOnce();
+        } catch (err) {
+            console.warn("[LLM] 第一次调用失败，尝试重试一次:", err);
+            llmResponse = await callModelOnce();
+        }
 
         if (!llmResponse.ok) {
             console.error("Workers AI 原始调用失败，状态码:", llmResponse.status);
-            return new Response(JSON.stringify({ error: "LLM Provider Error" }), { status: 502, headers: { 'Content-Type': 'application/json' }});
+            return new Response(JSON.stringify({ error: "LLM Provider Error" }), {
+                status: 502,
+                headers: { 'Content-Type': 'application/json' },
+            });
         }
 
         // 5. 提取流并设置持久化逻辑
@@ -124,11 +219,23 @@ async function handlePostChat(request: Request, env: Env, ctx: ExecutionContext)
             } finally {
                 activeControllers.delete(conversationId); 
                 
-                const aiMessage: Message = { role: 'assistant', content: fullAiResponseContent, timestamp: Date.now(), interrupted: isInterrupted };
+                const aiMessage: Message = {
+                    role: 'assistant',
+                    content: fullAiResponseContent,
+                    timestamp: Date.now(),
+                    interrupted: isInterrupted,
+                };
                 
                 const updatedHistory = [...history, userMessage, aiMessage];
                 await saveConversation(env, conversationId, updatedHistory); 
-                console.log(`对话 ${conversationId} 保存完成。`);
+
+                const elapsedMs = Date.now() - requestStart;
+                const promptTokens = estimateTokensFromMessages(messagesForAI);
+                const completionTokens = Math.ceil(fullAiResponseContent.length / 4);
+                console.log(
+                    `[METRICS] conversationId=${conversationId} model=${modelId} webSearch=${webSearchEnabled} ` +
+                    `promptTokens=${promptTokens} completionTokens=${completionTokens} durationMs=${elapsedMs}`
+                );
             }
         })());
 
@@ -147,39 +254,88 @@ async function handlePostChat(request: Request, env: Env, ctx: ExecutionContext)
 
     } catch (error) {
         console.error("Error processing chat request:", error);
-        return new Response(JSON.stringify({ error: "Failed to process request" }), { status: 500, headers: { "content-type": "application/json" }});
+        return new Response(JSON.stringify({ error: "Failed to process request" }), {
+            status: 500,
+            headers: { "content-type": "application/json" },
+        });
     }
 }
 
 
-// ... (export default { fetch(...) 路由逻辑保持不变) ...
+// --- 简单内存级 Rate Limiting（单 Worker 实例级别，防止滥用） ---
+const rateLimitMap = new Map<string, { windowStart: number; count: number }>();
+
+function getClientKey(request: Request): string {
+    // 在 Workers 中可以通过 request.headers.get("CF-Connecting-IP") 获取用户 IP
+    return request.headers.get("CF-Connecting-IP") || "unknown";
+}
+
+function checkRateLimit(request: Request, env: Env): { allowed: boolean; retryAfterSec?: number } {
+    const key = getClientKey(request);
+    const now = Date.now();
+
+    const windowSec = Number(env.RATE_LIMIT_WINDOW_SEC ?? 60);
+    const maxRequests = Number(env.RATE_LIMIT_MAX_REQUESTS ?? 30);
+    const windowMs = windowSec * 1000;
+
+    const record = rateLimitMap.get(key);
+
+    if (!record || now - record.windowStart >= windowMs) {
+        rateLimitMap.set(key, { windowStart: now, count: 1 });
+        return { allowed: true };
+    }
+
+    if (record.count < maxRequests) {
+        record.count += 1;
+        return { allowed: true };
+    }
+
+    const retryAfterSec = Math.ceil((record.windowStart + windowMs - now) / 1000);
+    return { allowed: false, retryAfterSec };
+}
+
+
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         const url = new URL(request.url);
 
         if (request.method === "OPTIONS") {
-             const headers = {
+            const headers = {
                 'Access-Control-Allow-Origin': '*',
                 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type, X-Conversation-ID',
                 'Access-Control-Max-Age': '86400',
-             };
-             return new Response(null, { status: 204, headers });
+            };
+            return new Response(null, { status: 204, headers });
         }
 
+        // 静态资源
         if (url.pathname === "/" || !url.pathname.startsWith("/api/")) {
             return env.ASSETS.fetch(request);
         }
 
+        // 历史记录读取
         if (url.pathname.startsWith("/api/history") && request.method === "GET") {
             return handleGetHistory(request, env);
         }
 
+        // 取消生成
         if (request.method === 'POST' && url.pathname.match(/\/api\/chat\/[^/]+\/cancel$/)) {
-             return handlePostCancel(request);
+            return handlePostCancel(request);
         }
 
+        // Rate limit 主要针对聊天接口
         if (url.pathname === "/api/chat" && request.method === "POST") {
+            const rl = checkRateLimit(request, env);
+            if (!rl.allowed) {
+                return new Response(JSON.stringify({ error: "请求过于频繁，请稍后再试。" }), {
+                    status: 429,
+                    headers: {
+                        "content-type": "application/json",
+                        "Retry-After": String(rl.retryAfterSec ?? 60),
+                    },
+                });
+            }
             return handlePostChat(request, env, ctx); 
         }
 

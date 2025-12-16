@@ -26,5 +26,15 @@
         }
     ],
 
+    // LLM 及安全控制相关配置（可按需调整）
+    "vars": {
+        "MODEL_ID": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        "TEMPERATURE": "0.3",
+        "MAX_OUTPUT_TOKENS": "1024",
+        "MAX_CONTEXT_TOKENS": "4000",
+        "RATE_LIMIT_WINDOW_SEC": "60",
+        "RATE_LIMIT_MAX_REQUESTS": "30"
+    },
+
 	"upload_source_maps": true
 }

@@ -10,6 +10,7 @@ const typingIndicator = document.getElementById("typing-indicator");
 const conversationList = document.getElementById('conversation-list');
 const newChatButton = document.getElementById('new-chat-button');
 const stopButton = document.getElementById('stop-button'); 
+const webSearchToggle = document.getElementById('web-search-toggle');
 
 // --- Chat state ---
 let chatHistory = []; 
@@ -95,7 +96,10 @@ async function sendMessage() {
             body: JSON.stringify({
                 messages: [{ role: "user", content: message }], 
                 // 确保发送 null 或 UUID 字符串
-                conversationId: currentConversationId, 
+                conversationId: currentConversationId,
+                options: {
+                    webSearchEnabled: !!(webSearchToggle && webSearchToggle.checked),
+                },
             }),
         });
 
@@ -136,10 +140,14 @@ async function sendMessage() {
 }
 
 
-function addMessageToChat(role, content, isSystem = false) {
+function addMessageToChat(role, content, isSystem = false, isInterrupted = false) {
     const messageEl = document.createElement("div");
     messageEl.className = `message ${role}-message ${isSystem ? 'system-message' : ''}`;
-    messageEl.innerHTML = `<p>${content}</p>`;
+    let displayContent = content;
+    if (role === 'assistant' && isInterrupted) {
+        displayContent += '（已中断）';
+    }
+    messageEl.innerHTML = `<p>${displayContent}</p>`;
     chatMessages.appendChild(messageEl);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -204,7 +212,7 @@ async function loadConversation(conversationId) {
         chatMessages.innerHTML = '';
         chatHistory.forEach(msg => {
             if (msg.role !== 'system') {
-                 addMessageToChat(msg.role, msg.content);
+                 addMessageToChat(msg.role, msg.content, false, !!msg.interrupted);
             }
         });
         
